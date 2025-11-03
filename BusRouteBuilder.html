@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bus Route Builder — Google Geocoder (Addresses Only)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root { --bg:#0b1020; --card:#151a2d; --muted:#9fb0d3; --accent:#4cc9f0; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:#fff}
+    header{padding:16px 20px;border-bottom:1px solid #26304d;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+    header h1{font-size:18px;margin:0;font-weight:600;letter-spacing:.2px}
+    .pill{font-size:12px;padding:4px 8px;border:1px solid #2b3556;border-radius:999px;color:var(--muted)}
+    .container{display:grid;grid-template-columns:380px 1fr;gap:14px;height:calc(100vh - 60px)}
+    .panel{padding:14px;background:var(--card);border:1px solid #212a47;border-radius:16px;height:calc(100% - 14px);margin-left:14px;overflow:auto}
+    .panel h2{font-size:14px;color:var(--muted);font-weight:600;margin:6px 0 10px}
+    label{font-size:12px;color:var(--muted);display:block;margin:10px 0 6px}
+    textarea,input{width:100%;background:#0f1324;color:#e8efff;border:1px solid #26304d;border-radius:10px;padding:10px 12px;font-size:14px}
+    textarea{min-height:120px;resize:vertical}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .btn{cursor:pointer;background:linear-gradient(180deg,#52d1ff 0%,#4cc9f0 100%);color:#021019;border:none;padding:10px 14px;border-radius:12px;font-weight:700;letter-spacing:.2px}
+    .btn.secondary{background:#0f1324;color:#9fb0d3;border:1px solid #26304d}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+    .chip{background:#0f1324;border:1px solid #26304d;color:#cfe1ff;border-radius:999px;padding:6px 10px;font-size:12px;display:flex;gap:8px;align-items:center}
+    .chip .dot{width:8px;height:8px;border-radius:50%;background:#4cc9f0;box-shadow:0 0 0 2px #092030 inset}
+    #map{height:calc(100vh - 28px);margin-right:14px;border-radius:16px;border:1px solid #212a47}
+    .statbar{display:flex;gap:10px;margin-top:10px}
+    .stat{flex:1;background:#0f1324;border:1px solid #26304d;border-radius:12px;padding:10px;color:#cfe1ff}
+    .stat .big{font-size:18px;font-weight:700;color:#fff}
+    .stat .label{font-size:12px;color:#9fb0d3}
+    .list{margin-top:10px}
+    .stop{padding:8px 10px;border:1px solid #26304d;background:#0f1324;border-radius:10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .stop .idx{font-weight:700;color:#4cc9f0}
+    .footer{font-size:11px;color:#9fb0d3;margin-top:12px}
+    a{color:#90e0ef}
+    #debug{font-size:11px;color:#9fb0d3;margin-top:10px;white-space:pre-wrap}
+    /* Numbered marker icons */
+    .num-icon{background:transparent;border:none}
+    .num-icon .num{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#4cc9f0;color:#06121f;font-weight:800;border:2px solid #0b223b;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+    .num-icon.depot .num{background:#ffdd57;color:#1a1a1a}
+  </style>
+</head>
+<body>
+  <header>
+    <h1> Bus Route Builder</h1>
+    <span class="pill">Version 1.0 </span>
+    <span class="pill">Google Maps API</span>
+    <span class="pill">Elijah Thompson</span>
+  </header>
+  <div class="container">
+    <aside class="panel">
+      <h2>Input</h2>
+      <label>Google Maps API key (required)</label>
+      <input id="gkey" placeholder="AIza... (referrer-restricted)" />
+
+      <label>Addresses (one per line) — <strong>addresses only</strong></label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <textarea id="addresses" placeholder="123 Main St, Shawnee, KS 66216
+12500 W 68th St, Shawnee, KS 66216
+..."></textarea>
+        <button id="uploadExcel" class="btn secondary" style="white-space:nowrap;">📂 Excel</button>
+        <input type="file" id="excelFile" accept=".xlsx,.xls" style="display:none;" />
+      </div>
+
+      <label>Depot (start/end). Optional — leave blank to start at 1st address.</label>
+      <input id="depot" placeholder="School, 12701 W 67th St, Shawnee, KS 66216" />
+
+      <div class="row" style="margin-top: 10px;">
+        <button id="build" class="btn">Build route</button>
+        <button id="clear" class="btn secondary">Clear</button>
+      </div>
+
+      <div class="statbar">
+        <div class="stat"><div class="big" id="statStops">0</div><div class="label">Stops</div></div>
+        <div class="stat"><div class="big" id="statMiles">0.00 mi</div><div class="label">Total distance</div></div>
+        <div class="stat"><div class="big" id="statTime">0m</div><div class="label">ETA (drive)</div></div>
+      </div>
+
+      <h2>Optimized order</h2>
+      <div id="order" class="list"></div>
+
+      <h2>Resolved locations</h2>
+      <div id="chips" class="chips"></div>
+
+      <div id="debug"></div>
+
+      <div class="footer">Routing by OSRM demo. Geocoding via Google <em>Maps JavaScript Geocoder</em> (client-side).</div>
+    </aside>
+    <main>
+      <div id="map"></div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
+  <script>
+    // ---------- Map ----------
+    const map = L.map('map', { zoomControl: true }).setView([39.0099, -94.7419], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+
+    // ensure raw address dots render above other layers
+    map.createPane('rawDots');
+    map.getPane('rawDots').style.zIndex = 750;
+
+    // ---------- DOM ----------
+    const $ = (id) => document.getElementById(id);
+    let stopMarkers = [], rawMarkers = [], routeLayer = null;
+
+    // ---------- Excel import (Address column only) ----------
+    $('uploadExcel').addEventListener('click', () => $('excelFile').click());
+    $('excelFile').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      try {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+        if (!rows || rows.length === 0) throw new Error('Empty sheet');
+        const header = rows[0].map(v => String(v || '').trim().toLowerCase());
+        const addrIdx = header.findIndex(h => ['address', 'addresses', 'street', 'location'].includes(h));
+        let lines = [];
+        if (addrIdx !== -1) {
+          for (let i = 1; i < rows.length; i++) { const r = rows[i]; const v = (r[addrIdx] || '').toString().trim(); if (v) lines.push(v); }
+        } else {
+          for (let i = 1; i < rows.length; i++) { const r = rows[i]; const v = (r[0] || '').toString().trim(); if (v) lines.push(v); }
+        }
+        if (lines.length === 0) throw new Error('No addresses found. Ensure the sheet has an Address column.');
+        $('addresses').value = lines.join('\n');
+        $('debug').textContent = `Loaded ${lines.length} addresses from ${file.name}`;
+      } catch (err) {
+        alert('Excel read failed: ' + (err.message || err));
+      }
+    });
+
+    // ---------- Utils ----------
+    const EPS_METERS = 200; // cluster threshold (~0.12mi)
+    const toRad = (d) => (d * Math.PI) / 180;
+    function haversine(a, b) {
+      const R = 6371000; // m
+      const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+      const la1 = toRad(a.lat), la2 = toRad(b.lat);
+      const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+      return 2 * R * Math.asin(Math.sqrt(h));
+    }
+    function toMiles(m){ return m / 1609.344; }
+    function metersToDegLat(m){ return m / 111320; }
+    function metersToDegLon(m, lat){ return m / (111320 * Math.cos(toRad(lat))); }
+
+    // ---------- clusterStops (for 200 m meeting points) ----------
+    function clusterStops(list, hasDepot) {
+      if (!Array.isArray(list) || list.length === 0) return list;
+      const start = hasDepot ? 1 : 0; // don’t cluster depot
+      const n = list.length, used = new Array(n).fill(false), clusters = [];
+      for (let i = start; i < n; i++) {
+        if (used[i]) continue;
+        const group = [];
+        for (let j = start; j < n; j++) {
+          if (used[j]) continue;
+          if (haversine(list[i], list[j]) <= EPS_METERS) group.push(j);
+        }
+        if (group.length >= 2) { group.forEach(idx => used[idx] = true); clusters.push(group); }
+      }
+      const out = [];
+      if (hasDepot) out.push(list[0]);
+      for (const g of clusters) {
+        let sl=0, so=0; g.forEach(idx => { sl += list[idx].lat; so += list[idx].lon; });
+        out.push({ lat: sl/g.length, lon: so/g.length, label: `Meeting point (${g.length})`, raw: `Cluster of ${g.length}` });
+      }
+      for (let i = start; i < n; i++) if (!used[i]) out.push(list[i]);
+      return out;
+    }
+
+    // ---------- Maps JavaScript Geocoder (client-side) ----------
+    let gGeocoder = null;
+    async function loadGoogleMapsJs(apiKey){
+      if (window.google && window.google.maps) return;
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly`;
+        s.async = true; s.defer = true;
+        s.onload = resolve; s.onerror = () => reject(new Error('Maps JS failed to load'));
+        document.head.appendChild(s);
+      });
+    }
+    function latLngBoundsFromDepot(depot){
+      const d = 0.12; // ~10–13 km box
+      const sw = new google.maps.LatLng(depot.lat - d, depot.lon - d);
+      const ne = new google.maps.LatLng(depot.lat + d, depot.lon + d);
+      return new google.maps.LatLngBounds(sw, ne);
+    }
+    function geocodeViaJsGeocoder(address, depot){
+      return new Promise((resolve, reject) => {
+        const reqBase = { address: address.trim(), componentRestrictions: { country: 'US' } };
+        const tryOnce = (withBounds) => {
+          const req = { ...reqBase };
+          if (withBounds && depot) req.bounds = latLngBoundsFromDepot(depot);
+          gGeocoder.geocode(req, (results, status) => {
+            if (status === 'OK' && results && results.length) {
+              let best = results[0];
+              for (const r of results) if (r.geometry && r.geometry.location_type === 'ROOFTOP') { best = r; break; }
+              const loc = best.geometry.location;
+              const label = best.formatted_address + (best.geometry.location_type ? ` [${best.geometry.location_type}]` : '');
+              resolve({ lat: loc.lat(), lon: loc.lng(), label });
+            } else if (withBounds && depot) {
+              tryOnce(false); // retry once without bounds
+            } else {
+              reject(new Error('No match (' + status + ')'));
+            }
+          });
+        };
+        tryOnce(true);
+      });
+    }
+    async function geocodeAddressOnly(query, apiKey, depot){
+      if (/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(query)) {
+        throw new Error('Coordinates are not allowed. Please enter a full street address.');
+      }
+      await loadGoogleMapsJs(apiKey);
+      if (!gGeocoder) gGeocoder = new google.maps.Geocoder();
+      return await geocodeViaJsGeocoder(query, depot);
+    }
+
+    // ---------- OSRM ----------
+    async function osrmTable(coords) {
+      const s = coords.map(c => `${c.lon},${c.lat}`).join(';');
+      const r = await fetch(`https://router.project-osrm.org/table/v1/driving/${s}?annotations=distance,duration`);
+      if (!r.ok) throw new Error('OSRM table failed'); return r.json();
+    }
+    async function osrmRoute(coords) {
+      const s = coords.map(c => `${c.lon},${c.lat}`).join(';');
+      const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${s}?overview=full&geometries=geojson`);
+      if (!r.ok) throw new Error('OSRM route failed'); return r.json();
+    }
+
+    // ---------- TSP heuristic ----------
+    function tspNearestNeighbor(D, start) {
+      const n = D.length, visited = new Array(n).fill(false), route = [start]; visited[start] = true;
+      for (let k = 1; k < n; k++) { const last = route[route.length - 1]; let best = -1, bestD = Infinity; for (let j = 0; j < n; j++) if (!visited[j] && D[last][j] < bestD) { bestD = D[last][j]; best = j; } route.push(best); visited[best] = true; }
+      return route;
+    }
+    function twoOpt(route, D) {
+      let improved = true; const n = route.length;
+      const len = (rt) => { let s = 0; for (let i = 0; i < rt.length - 1; i++) s += D[rt[i]][rt[i+1]]; return s; };
+      let best = route.slice(), bestLen = len(best);
+      while (improved) {
+        improved = false;
+        for (let i = 1; i < n - 2; i++) {
+          for (let k = i + 1; k < n - 1; k++) {
+            const nr = best.slice(0, i).concat(best.slice(i, k+1).reverse(), best.slice(k+1));
+            const nl = len(nr);
+            if (nl + 1e-6 < bestLen) { best = nr; bestLen = nl; improved = true; }
+          }
+        }
+      }
+      return best;
+    }
+
+    // ---------- Icons & helpers ----------
+    function numberIcon(n){
+      return L.divIcon({className:'num-icon', html:`<div class="num">${n}</div>`, iconSize:[28,28], iconAnchor:[14,14]});
+    }
+    function depotIcon(){
+      return L.divIcon({className:'num-icon depot', html:`<div class="num">D</div>`, iconSize:[28,28], iconAnchor:[14,14]});
+    }
+
+    function clearMap() {
+      stopMarkers.forEach(m => m.remove()); stopMarkers = [];
+      rawMarkers.forEach(m => m.remove()); rawMarkers = [];
+      if (routeLayer) { routeLayer.remove(); routeLayer = null; }
+      $('order').innerHTML = '';
+      $('chips').innerHTML = '';
+      $('statStops').textContent = '0';
+      $('statMiles').textContent = '0.00 mi';
+      $('statTime').textContent = '0m';
+      $('debug').textContent = '';
+    }
+
+    // ---------- Actions ----------
+    $('clear').addEventListener('click', clearMap);
+
+    $('build').addEventListener('click', async () => {
+      try {
+        $('build').disabled = true; $('debug').textContent = '';
+        const apiKey = $('gkey').value.trim();
+        if (!apiKey) throw new Error('Please paste your Google Maps API key.');
+        clearMap();
+
+        const lines = $('addresses').value.split('\n').map(s => s.trim()).filter(Boolean);
+        if (lines.length === 0) throw new Error('Please enter or import at least one address.');
+        const depotStr = $('depot').value.trim(); const hasDepot = depotStr.length > 0;
+
+        // Geocode depot (optional)
+        let depot = null;
+        if (hasDepot) {
+          try { depot = await geocodeAddressOnly(depotStr, apiKey, null); }
+          catch (e) { $('debug').textContent = `Depot geocode failed: ${e.message}. Continuing without bounds.`; }
+        }
+
+        // Geocode stops (addresses only)
+        const preClusterStops = [];
+        for (const q of lines) {
+          const g = await geocodeAddressOnly(q, apiKey, depot || null);
+          preClusterStops.push({ ...g, raw: q });
+        }
+
+        // Place small markers for every entered address (with slight jitter)
+        const groupAll = L.featureGroup();
+        const coincident = new Map();
+        preClusterStops.forEach((s) => {
+          const key = `${s.lat.toFixed(6)},${s.lon.toFixed(6)}`;
+          const seen = (coincident.get(key) || 0);
+          coincident.set(key, seen + 1);
+
+          let lat = s.lat, lon = s.lon;
+          if (seen > 0) { // small jitter pre-route
+            const radiusM = 6, angle = (seen - 1) * 0.9;
+            lat += metersToDegLat(radiusM * Math.sin(angle));
+            lon += metersToDegLon(radiusM * Math.cos(angle), s.lat);
+          }
+
+          const dot = L.circleMarker([lat, lon], {
+            pane: 'rawDots', radius: 6, weight: 2,
+            color: '#0f3766', fillColor: '#155aa8', fillOpacity: 1.0, opacity: 1.0
+          }).addTo(map).bindPopup('Address\\n' + (s.raw || s.label));
+          rawMarkers.push(dot); groupAll.addLayer(dot);
+        });
+
+        // Compose list with optional depot at index 0
+        let geocoded = depot ? [{...depot, raw: depotStr}].concat(preClusterStops) : preClusterStops.slice();
+
+        // Cluster within 200 m (keeps depot at [0] if present)
+        geocoded = clusterStops(geocoded, !!depot);
+        if ((geocoded.length - (depot ? 1 : 0)) < 1) throw new Error('After clustering, no valid stops remain.');
+
+        // Chips & (draggable) stop markers
+        const groupStops = L.featureGroup();
+        geocoded.forEach((g, i) => {
+          const isDepot = !!depot && i === 0;
+          const chip = document.createElement('div'); chip.className = 'chip';
+          chip.innerHTML = `<span class="dot"></span><span>${isDepot ? 'Depot: ' : ''}${g.label}</span>`;
+          $('chips').appendChild(chip);
+
+          const m = L.marker([g.lat, g.lon], { draggable: !isDepot })
+            .addTo(map)
+            .bindPopup((isDepot ? 'Depot' : 'Stop') + '<br/>' + (g.raw || g.label));
+          stopMarkers.push(m); groupStops.addLayer(m);
+        });
+
+        // Fit bounds to everything (raw dots + stops)
+        const fbounds = L.featureGroup([...groupAll.getLayers(), ...groupStops.getLayers()]).getBounds();
+        if (fbounds.isValid()) map.fitBounds(fbounds.pad(0.2));
+
+        // --- Reroute: recompute distances, order, icons, polyline & stats ---
+        async function reroute(){
+          const pts = stopMarkers.map((m,i) => {
+            const ll = m.getLatLng(); return { lat: ll.lat, lon: ll.lng, label: geocoded[i].label, raw: geocoded[i].raw };
+          });
+          const table = await osrmTable(pts);
+          const D = table.distances, T = table.durations;
+          let order = tspNearestNeighbor(D, 0); order = twoOpt(order, D);
+          if (!!depot && order[order.length - 1] !== 0) order.push(0);
+
+          // Numbered icons (Depot = D)
+          stopMarkers.forEach((m,i)=>{ m.setIcon(i===0 && depot ? depotIcon() : numberIcon('?')); });
+          const seq = order.slice(); if (depot && seq[seq.length-1]===0) seq.pop();
+          let num = 1; seq.forEach((idx) => { if (depot && idx===0) return; stopMarkers[idx].setIcon(numberIcon(num++)); });
+
+          // Stats
+          let totM = 0, totS = 0; for (let i = 0; i < order.length - 1; i++) { totM += D[order[i]][order[i+1]]; totS += T[order[i]][order[i+1]]; }
+          $('statStops').textContent = depot ? (pts.length - 1) : pts.length;
+          $('statMiles').textContent = toMiles(totM).toFixed(2) + ' mi';
+          $('statTime').textContent = Math.round(totS / 60) + 'm';
+
+          // Order list
+          const human = order.slice(); if (depot && human[human.length - 1] === 0) human.pop();
+          $('order').innerHTML = '';
+          human.forEach((idx, step) => {
+            const div = document.createElement('div'); div.className = 'stop';
+            const label = (depot && idx === 0) ? 'Depot' : (geocoded[idx].raw || geocoded[idx].label);
+            div.innerHTML = `<span class="idx">${step + 1}</span><span style="flex:1;">${label}</span>`;
+            $('order').appendChild(div);
+          });
+
+          // Route line
+          if (routeLayer) { routeLayer.remove(); routeLayer = null; }
+          const coords = order.map(i => ({ lat: pts[i].lat, lon: pts[i].lon }));
+          const rr = await osrmRoute(coords);
+          routeLayer = L.geoJSON(rr.routes[0].geometry, { style: { weight: 5, opacity: 0.9 } }).addTo(map);
+
+          // Move raw address dots ~12 m to the side of the nearest route segment (so they aren't under the polyline)
+          const routeLL = rr.routes[0].geometry.coordinates; // [[lon,lat], ...]
+          rawMarkers.forEach((m) => {
+            const ll = m.getLatLng();
+            const adj = adjustDotBesideRoute({lat: ll.lat, lon: ll.lng}, routeLL);
+            m.setLatLng([adj.lat, adj.lon]); m.bringToFront();
+          });
+        }
+
+        // Side-of-road helpers (ASCII identifiers to avoid lint warnings)
+        const R_EARTH = 6371000; // m
+        function bearingDeg(a, b){
+          const phi1 = toRad(a.lat), phi2 = toRad(b.lat);
+          const dlam = toRad(b.lon - a.lon);
+          const y = Math.sin(dlam) * Math.cos(phi2);
+          const x = Math.cos(phi1)*Math.sin(phi2) - Math.sin(phi1)*Math.cos(phi2)*Math.cos(dlam);
+          let th = Math.atan2(y, x) * 180/Math.PI; if (th < 0) th += 360; return th;
+        }
+        function destinationPoint(lat, lon, distM, brgDeg){
+          const delta = distM / R_EARTH;
+          const th = toRad(brgDeg);
+          const phi1 = toRad(lat), lam1 = toRad(lon);
+          const sin1 = Math.sin(phi1), cos1 = Math.cos(phi1);
+          const sind = Math.sin(delta), cosd = Math.cos(delta);
+          const sin2 = sin1*cosd + cos1*sind*Math.cos(th);
+          const phi2 = Math.asin(sin2);
+          const y = Math.sin(th)*sind*cos1;
+          const x = cosd - sin1*sin2;
+          const lam2 = lam1 + Math.atan2(y, x);
+          return { lat: (phi2*180/Math.PI), lon: (lam2*180/Math.PI) };
+        }
+        function nearestPointOnSegmentPXY(p, a, b){
+          const phi0 = toRad(p.lat);
+          function proj(q){ return {
+            x: R_EARTH * Math.cos(phi0) * toRad(q.lon - p.lon),
+            y: R_EARTH * toRad(q.lat - p.lat)
+          }; }
+          const P = {x:0, y:0};
+          const A = proj(a), B = proj(b);
+          const AB = {x: B.x - A.x, y: B.y - A.y};
+          const AP = {x: P.x - A.x, y: P.y - A.y};
+          const ab2 = AB.x*AB.x + AB.y*AB.y || 1e-12;
+          let t = (AP.x*AB.x + AP.y*AB.y) / ab2; t = Math.max(0, Math.min(1, t));
+          return { t, closestXY: {x: A.x + AB.x*t, y: A.y + AB.y*t} };
+        }
+        function adjustDotBesideRoute(dotLL, routeLatLng){
+          if (!routeLatLng || routeLatLng.length < 2) return dotLL; // no route yet
+          let best = {dist2: Infinity, idx: 0, t: 0};
+          for (let i = 0; i < routeLatLng.length-1; i++){
+            const a = {lat: routeLatLng[i][1], lon: routeLatLng[i][0]};
+            const b = {lat: routeLatLng[i+1][1], lon: routeLatLng[i+1][0]};
+            const pr = nearestPointOnSegmentPXY(dotLL, a, b);
+            const dx = pr.closestXY.x, dy = pr.closestXY.y;
+            const d2 = dx*dx + dy*dy;
+            if (d2 < best.dist2){ best = {dist2: d2, idx: i, t: pr.t}; }
+          }
+          const a = {lat: routeLatLng[best.idx][1], lon: routeLatLng[best.idx][0]};
+          const b = {lat: routeLatLng[best.idx+1][1], lon: routeLatLng[best.idx+1][0]};
+          const brg = bearingDeg(a, b);
+          const sideBrg = (brg + 90) % 360; // offset to the right of travel
+          return destinationPoint(dotLL.lat, dotLL.lon, 12, sideBrg);
+        }
+
+        // Attach drag handlers to stop markers to reroute on move
+        stopMarkers.forEach((m, i) => {
+          if (depot && i === 0) return; // depot not draggable
+          m.on('dragend', () => reroute());
+        });
+
+        // Initial route & numbering
+        await reroute();
+
+      } catch (err) {
+        $('debug').textContent = (err && err.message) ? 'Error: ' + err.message : String(err);
+        alert(err.message || String(err));
+      } finally {
+        $('build').disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
